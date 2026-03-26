@@ -1,0 +1,124 @@
+(progn ;;init forms
+  (ros:ensure-asdf))
+
+(defpackage :ros.script.tmux
+  (:use :cl))
+(in-package :ros.script.tmux)
+
+(defparameter *default-wait* 2
+  "Default seconds to wait between pane captures.")
+
+(defparameter *default-fence* "*"
+  "String a prompt line must start with.")
+
+(defparameter *default-lookback* 200
+  "Max lines to look back when capturing the pane.")
+
+(defun capture-pane (pane lookback)
+  "Capture the last LOOKBACK lines of a tmux pane."
+  (uiop:run-program
+    (list "tmux" "capture-pane" "-t" pane "-p"
+          "-S" (format nil "-~a" lookback))
+    :output :string
+    :error-output :string))
+
+(defun split-lines (text)
+  "Split TEXT into a list of lines."
+  (uiop:split-string text :separator '(#\Newline)))
+
+(defun prompt-p (line fence)
+  "Return true if LINE starts with FENCE."
+  (and (>= (length line) (length fence))
+       (string= line fence :end1 (length fence))))
+
+(defun last-meaningful-line (lines)
+  "Return the last non-empty line in LINES, or NIL."
+  (loop :for line :in (reverse lines)
+        :when (> (length line) 0)
+          :return line))
+
+(defun last-fence-index (lines fence)
+  "Return the index of the last prompt line in LINES,
+or NIL if none found."
+  (let ((result nil))
+    (loop :for line :in lines
+          :for i :from 0
+          :when (prompt-p line fence)
+            :do (setf result i))
+    result))
+
+(defun second-to-last-fence-index (lines fence)
+  "Return the index of the second-to-last prompt line in
+LINES (i.e. the last prompt before the final one),
+or NIL if fewer than two prompt lines exist."
+  (let ((end-idx (last-fence-index lines fence)))
+    (when end-idx
+      (let ((result nil))
+        (loop :for line :in lines
+              :for i :from 0
+              :when (and (prompt-p line fence)
+                         (< i end-idx))
+                :do (setf result i))
+        result))))
+
+(defun prompt-block-p (lines fence)
+  "Return true if LINES ends with a prompt line and
+contains a prior prompt line (a complete block)."
+  (let ((last (last-meaningful-line lines)))
+    (and last
+         (prompt-p last fence)
+         (second-to-last-fence-index lines fence))))
+
+(defun capture-lines (pane lookback)
+  "Capture PANE and return its contents as a list of lines."
+  (split-lines (capture-pane pane lookback)))
+
+(defun extract-block (lines fence)
+  "Return lines from the start prompt up to and including
+the end prompt (the last meaningful prompt line)."
+  (let* ((end-idx (last-fence-index lines fence))
+         (start-idx
+           (second-to-last-fence-index lines fence)))
+    (if (and start-idx end-idx)
+        (subseq lines start-idx (1+ end-idx))
+        lines)))
+
+(defun wait-for-stable-block
+    (pane fence lookback &key (wait-seconds *default-wait*))
+  "Wait for a stable prompt-to-prompt block in PANE.
+Phase 1: if the pane already shows a complete block,
+wait until it changes (a new command was submitted).
+Phase 2: wait until a complete block is stable across
+two consecutive captures."
+  (let ((current (capture-lines pane lookback)))
+    ;; Phase 1: skip past any already-complete idle block.
+    (when (prompt-block-p current fence)
+      (loop
+        (sleep wait-seconds)
+        (let ((next (capture-lines pane lookback)))
+          (unless (equal current next)
+            (setf current next)
+            (return)))))
+    ;; Phase 2: wait for a new stable complete block.
+    (loop
+      (sleep wait-seconds)
+      (let ((next (capture-lines pane lookback)))
+        (when (and (prompt-block-p next fence)
+                   (equal current next))
+          (return next))
+        (setf current next)))))
+
+(defun main (&rest argv)
+  "Wait for tmux pane 0 to produce a complete prompt-to-
+prompt block, then print it."
+  (declare (ignorable argv))
+  (let* ((lines
+           (wait-for-stable-block
+             "0"
+             *default-fence*
+             *default-lookback*))
+         (block-lines
+           (extract-block lines *default-fence*)))
+    (format t "~{~a~%~}" block-lines)))
+
+;;; vim: set ft=lisp lisp:
