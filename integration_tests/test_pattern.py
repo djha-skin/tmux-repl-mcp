@@ -10,7 +10,7 @@ from tmux_repl_mcp.config import load_kinds
 kinds = load_kinds()
 lisp_pattern = kinds['lisp']
 
-print(f"Lisp pattern: {lisp_pattern!r}")
+print(f"Lisp patterns: {lisp_pattern!r}")
 print()
 
 test_lines = [

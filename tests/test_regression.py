@@ -44,8 +44,7 @@ from unittest.mock import patch
 import pytest
 
 from tmux_repl_mcp.core import (
-    DEFAULT_DEBUGGER_PATTERNS,
-    DEFAULT_READY_PATTERNS,
+    DEFAULT_PROMPT_PATTERNS,
     extract_last_command_and_output,
     split_lines,
 )
@@ -240,7 +239,7 @@ class TestExtractWithDebuggerPrompt:
     def test_extract_command_when_block_ends_in_debugger_prompt(self):
         lines = split_lines(PANE_AFTER_DIVIDE_BY_ZERO)
         cmd, out = extract_last_command_and_output(
-            lines, "lisp", DEFAULT_READY_PATTERNS, DEFAULT_DEBUGGER_PATTERNS
+            lines, "lisp", DEFAULT_PROMPT_PATTERNS,
         )
         assert cmd == "(/ 1 0)", f"Got {cmd!r}"
         assert out is not None
@@ -249,7 +248,7 @@ class TestExtractWithDebuggerPrompt:
     def test_extract_output_does_not_include_debugger_prompt_line(self):
         lines = split_lines(PANE_AFTER_DIVIDE_BY_ZERO)
         _, out = extract_last_command_and_output(
-            lines, "lisp", DEFAULT_READY_PATTERNS, DEFAULT_DEBUGGER_PATTERNS
+            lines, "lisp", DEFAULT_PROMPT_PATTERNS,
         )
         # The boundary line "0] " should not appear as the last line of output
         assert out is not None
@@ -272,20 +271,11 @@ class TestFullPaneCaptureRegression:
     2. The "0]" prompt SHOULD be recognized as a ready lisp prompt.
     """
 
-    def test_debugger_prompt_0_is_recognized_as_ready(self):
-        """The '0]' debugger prompt should be recognized as a lisp prompt."""
-        from tmux_repl_mcp.core import is_debugger_prompt
-        
-        # The pattern "0] " should match the debugger pattern
-        assert is_debugger_prompt("0] ", "lisp", DEFAULT_DEBUGGER_PATTERNS)
-        assert is_debugger_prompt("0]", "lisp", DEFAULT_DEBUGGER_PATTERNS)
-        assert is_debugger_prompt("1] ", "lisp", DEFAULT_DEBUGGER_PATTERNS)
-
     def test_extract_command_from_full_pane_capture(self):
         """Extract command and output from the full pane capture."""
         lines = split_lines(PANE_CAPTURE_FULL)
         cmd, out = extract_last_command_and_output(
-            lines, "lisp", DEFAULT_READY_PATTERNS, DEFAULT_DEBUGGER_PATTERNS
+            lines, "lisp", DEFAULT_PROMPT_PATTERNS
         )
         # Should extract the last command "(/ 1 0)"
         assert cmd == "(/ 1 0)", f"Expected '(/ 1 0)' but got {cmd!r}"
@@ -300,7 +290,7 @@ class TestFullPaneCaptureRegression:
         """Extract command and output from the final debugger state."""
         lines = split_lines(PANE_CAPTURE_FINAL_DEBUGGER)
         cmd, out = extract_last_command_and_output(
-            lines, "lisp", DEFAULT_READY_PATTERNS, DEFAULT_DEBUGGER_PATTERNS
+            lines, "lisp", DEFAULT_PROMPT_PATTERNS
         )
         assert cmd == "(/ 1 0)", f"Expected '(/ 1 0)' but got {cmd!r}"
         assert out is not None
@@ -321,7 +311,7 @@ class TestFullPaneCaptureRegression:
         """
         lines = split_lines(PANE_CAPTURE_TRUNCATED)
         cmd, out = extract_last_command_and_output(
-            lines, "lisp", DEFAULT_READY_PATTERNS, DEFAULT_DEBUGGER_PATTERNS
+            lines, "lisp", DEFAULT_PROMPT_PATTERNS,
         )
         # With truncated capture, there's no debugger prompt at the end,
         # so extraction should fail or return incomplete results

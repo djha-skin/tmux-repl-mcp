@@ -17,31 +17,25 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 # Patterns for when the REPL is READY to accept commands
-DEFAULT_READY_PATTERNS: dict[str, str] = {
+DEFAULT_PROMPT_PATTERNS: dict[str, str] = {
     "python": r"^>>> ",
-    "ipython": r"^In \[\d+\]: ",
-    "bash": r"[\$\#]\s*$",
-    "zsh": r"[\$\#%]\s*$",
-    "sh": r"[\$\#]\s*$",
-    # Lisp ready prompts: normal REPL (not debugger)
+    "ipython": r"^In \\d+\: ",
+    "bash": r"^[^$#]+[$#] *",
+    "sh": r"^[^$#]+[$#] *",
+    "zsh": r"^[^$+][$#] *",
+    # Lisp ready prompts: top-level REPL only, INCLUDING debugger prompts
     # "*" - bare idle prompt (nothing after it)
     # "* " - top-level prompt with or without command
     # "Name> " - custom package / slynk prompt, e.g. "slynk> " or "CL-USER> "
-    # Also match debugger prompts "N]" as "ready" for extraction purposes
-    "lisp": r"^\* |^\*$|^[A-Za-z0-9.-]+> |^\d+\] ?",
+    # "?" - CCL
+    # TO BE PERFECTLY CLEAR, THE DEBUGGER STATE PROMPT IS *DEFINITELY* A READY
+    # PROMPT. The user can be in the debugger and still type commands, so the
+    # debugger prompt is a valid command boundary and must be treated as such.
+    "lisp": r"^\? |^\* |^\*$|[A-Za-z0-9.-]+> |^ *[0-9]+\] ?",
     "node": r"^> ",
     "irb": r"^irb\(.*\):\d+:\d+> $",
     "iex": r"^iex\(\d+\)> $",
 }
-
-# Patterns for when the REPL is in an ERROR/DEBUGGER state
-DEFAULT_DEBUGGER_PATTERNS: dict[str, str] = {
-    # Lisp debugger prompts: "N] " e.g. "0] ", "1] ", etc.
-    # Also match "N]" without trailing space (end of line)
-    "lisp": r"^\d+\] ?",
-    # Add other debugger patterns here as needed
-}
-
 
 # ---------------------------------------------------------------------------
 # Low-level tmux helpers
@@ -87,21 +81,12 @@ def split_lines(text: str) -> list[str]:
     return text.split("\n")
 
 
-def is_prompt_line(line: str, kind: str, kinds: dict[str, str]) -> bool:
+def is_prompt_line(line: str, kind: str, kinds: dict[str, list[str]]) -> bool:
     """Return True if *line* matches the prompt regex for *kind*."""
     pattern = kinds.get(kind)
     if pattern is None:
         return False
     return bool(re.search(pattern, line))
-
-
-def is_debugger_prompt(line: str, kind: str, debugger_patterns: dict[str, str]) -> bool:
-    """Return True if *line* matches the debugger pattern for *kind*."""
-    pattern = debugger_patterns.get(kind)
-    if pattern is None:
-        return False
-    return bool(re.search(pattern, line))
-
 
 def last_meaningful_line(lines: list[str]) -> Optional[str]:
     """Return the last non-empty line, or None."""
@@ -115,14 +100,12 @@ def last_prompt_index(
     lines: list[str],
     kind: str,
     kinds: dict[str, str],
-    debugger_patterns: Optional[dict[str, str]] = None,
 ) -> Optional[int]:
-    """Return the index of the *last* prompt line (ready or debugger), or None."""
+    """Return the index of the *last* prompt line (including debugger prompts),
+    or None."""
     result: Optional[int] = None
     for i, line in enumerate(lines):
         if is_prompt_line(line, kind, kinds):
-            result = i
-        elif debugger_patterns and is_debugger_prompt(line, kind, debugger_patterns):
             result = i
     return result
 
@@ -131,15 +114,13 @@ def second_to_last_prompt_index(
     lines: list[str],
     kind: str,
     kinds: dict[str, str],
-    debugger_patterns: Optional[dict[str, str]] = None,
 ) -> Optional[int]:
     """Return the index of the second-to-last prompt line (ready only), or None.
 
-    The "start" boundary of a command block is always a *ready* prompt (the one
-    that the user typed their command at).  Only the *end* boundary may be a
-    debugger prompt.
+    The "start" boundary of a command block is always a prompt (remember,
+    debugger prompts are normal prompts).
     """
-    end_idx = last_prompt_index(lines, kind, kinds, debugger_patterns)
+    end_idx = last_prompt_index(lines, kind, kinds)
     if end_idx is None:
         return None
     result: Optional[int] = None
@@ -147,11 +128,8 @@ def second_to_last_prompt_index(
         if i >= end_idx:
             break
         # Only ready prompts can be the start of a command block
+        # Debugger prompts are valid ready prompts and thus valid boundaries.
         if is_prompt_line(line, kind, kinds):
-            # CRITICAL: If this line is ALSO a debugger prompt, skip it
-            # We only want top-level ready prompts (e.g., "* ") not debugger prompts (e.g., "0] ")
-            if debugger_patterns and is_debugger_prompt(line, kind, debugger_patterns):
-                continue
             result = i
     return result
 
@@ -159,23 +137,20 @@ def second_to_last_prompt_index(
 def prompt_block_p(
     lines: list[str],
     kind: str,
-    kinds: dict[str, str],
-    debugger_patterns: Optional[dict[str, str]] = None,
+    kinds: dict[str, str]
 ) -> bool:
     """
-    Return True if *lines* ends with a prompt line (ready or debugger) **and**
-    contains at least one prior *ready* prompt line (i.e. a complete
+    Return True if *lines* ends with a prompt line (standard or debugger)
+    **and** contains at least one prior *ready* prompt line (i.e. a complete
     command→output→prompt block exists).
     """
     last = last_meaningful_line(lines)
     if last is None:
         return False
-    is_end = is_prompt_line(last, kind, kinds) or (
-        debugger_patterns is not None and is_debugger_prompt(last, kind, debugger_patterns)
-    )
+    is_end = is_prompt_line(last, kind, kinds)
     if not is_end:
         return False
-    return second_to_last_prompt_index(lines, kind, kinds, debugger_patterns) is not None
+    return second_to_last_prompt_index(lines, kind, kinds) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -184,28 +159,24 @@ def prompt_block_p(
 
 
 def detect_kind(
-    lines: list[str], kinds: dict[str, str], debugger_patterns: Optional[dict[str, str]] = None
+    lines: list[str], kinds: dict[str, str]
 ) -> Optional[str]:
     """
-    Return the first *kind* whose prompt regex matches the last meaningful
-    line of *lines*, or None.
-    
-    If a debugger pattern matches, returns None (REPL is not ready).
+    Return the *kind* whose prompt regex (ready or debugger) matches the last
+    meaningful line of *lines*, or None if no known prompt is found.
+
+    The debugger is a valid REPL state — if a debugger prompt is detected for
+    a kind, that kind is returned just like a normal ready prompt.
     """
     last = last_meaningful_line(lines)
     if last is None:
         return None
-    
-    # Check debugger patterns first - if we're in a debugger, REPL is not ready
-    if debugger_patterns:
-        for kind, pattern in debugger_patterns.items():
-            if re.search(pattern, last):
-                return None
-    
-    # Check ready patterns
+
+    # Check ready patterns first
     for kind, pattern in kinds.items():
         if re.search(pattern, last):
             return kind
+
     return None
 
 
@@ -213,7 +184,6 @@ def extract_last_command_and_output(
     lines: list[str],
     kind: str,
     kinds: dict[str, str],
-    debugger_patterns: Optional[dict[str, str]] = None,
 ) -> tuple[Optional[str], Optional[str]]:
     """
     Return ``(last_command, output)`` parsed from *lines*.
@@ -224,8 +194,8 @@ def extract_last_command_and_output(
 
     Returns ``(None, None)`` if a complete block cannot be found.
     """
-    end_idx = last_prompt_index(lines, kind, kinds, debugger_patterns)
-    start_idx = second_to_last_prompt_index(lines, kind, kinds, debugger_patterns)
+    end_idx = last_prompt_index(lines, kind, kinds)
+    start_idx = second_to_last_prompt_index(lines, kind, kinds)
     if start_idx is None or end_idx is None:
         return None, None
 
@@ -251,7 +221,6 @@ def wait_and_capture(
     kinds: dict[str, str],
     max_lines: int,
     check: float,
-    debugger_patterns: Optional[dict[str, str]] = None,
 ) -> list[str]:
     """
     Wait until the REPL is idle again.
@@ -270,15 +239,11 @@ def wait_and_capture(
 
         # Get the last non-empty line (tmux capture-pane often has trailing empty lines)
         last_line = last_meaningful_line(current)
-        
+
         if last_line is None:
             time.sleep(check)
             continue
-        
-        # Check if we're in a debugger - return immediately so caller can handle it
-        if debugger_patterns and is_debugger_prompt(last_line, kind, debugger_patterns):
-            return current
-        
+
         # Check if we're back at a ready prompt
         if is_prompt_line(last_line, kind, kinds):
             return current

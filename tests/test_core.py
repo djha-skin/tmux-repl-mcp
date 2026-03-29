@@ -4,12 +4,10 @@ Unit tests for tmux_repl_mcp.core (no tmux required).
 
 import pytest
 from tmux_repl_mcp.core import (
-    DEFAULT_READY_PATTERNS,
-    DEFAULT_DEBUGGER_PATTERNS,
+    DEFAULT_PROMPT_PATTERNS,
     detect_kind,
     extract_last_command_and_output,
     is_prompt_line,
-    is_debugger_prompt,
     last_meaningful_line,
     last_prompt_index,
     prompt_block_p,
@@ -17,8 +15,7 @@ from tmux_repl_mcp.core import (
     split_lines,
 )
 
-READY_PATTERNS = DEFAULT_READY_PATTERNS
-DEBUGGER_PATTERNS = DEFAULT_DEBUGGER_PATTERNS
+PROMPT_PATTERNS = DEFAULT_PROMPT_PATTERNS
 
 
 # ---------------------------------------------------------------------------
@@ -40,40 +37,33 @@ def test_split_lines_trailing_newline():
 
 
 def test_is_prompt_line_python():
-    assert is_prompt_line(">>> ", "python", READY_PATTERNS)
-    assert is_prompt_line(">>> 1 + 1", "python", READY_PATTERNS)
-    assert not is_prompt_line("... ", "python", READY_PATTERNS)
+    assert is_prompt_line(">>> ", "python", PROMPT_PATTERNS)
+    assert is_prompt_line(">>> 1 + 1", "python", PROMPT_PATTERNS)
+    assert not is_prompt_line("... ", "python", PROMPT_PATTERNS)
 
 
 def test_is_prompt_line_lisp():
     # Top-level CL prompt ("* " followed by optional command text)
-    assert is_prompt_line("* ", "lisp", READY_PATTERNS)
-    assert is_prompt_line("* (+ 1 2)", "lisp", READY_PATTERNS)
+    assert is_prompt_line("* ", "lisp", PROMPT_PATTERNS)
+    assert is_prompt_line("* (+ 1 2)", "lisp", PROMPT_PATTERNS)
     # Named package prompt
-    assert is_prompt_line("slynk> ", "lisp", READY_PATTERNS)
+    assert is_prompt_line("slynk> ", "lisp", PROMPT_PATTERNS)
+    assert is_prompt_line("0] ", "lisp", PROMPT_PATTERNS)
+    assert is_prompt_line("   3] ", "lisp", PROMPT_PATTERNS)
     # Not a prompt
-    assert not is_prompt_line("hello", "lisp", READY_PATTERNS)
-    assert not is_prompt_line("3", "lisp", READY_PATTERNS)
+    assert not is_prompt_line("hello", "lisp", PROMPT_PATTERNS)
+    assert not is_prompt_line("3", "lisp", PROMPT_PATTERNS)
 
-
-def test_is_debugger_prompt_lisp():
-    # Debugger prompts should be detected
-    assert is_debugger_prompt("0] ", "lisp", DEBUGGER_PATTERNS)
-    assert is_debugger_prompt("1] ", "lisp", DEBUGGER_PATTERNS)
-    assert is_debugger_prompt("1] (help)", "lisp", DEBUGGER_PATTERNS)
-    # Normal prompts should NOT be debugger prompts
-    assert not is_debugger_prompt("* ", "lisp", DEBUGGER_PATTERNS)
-    assert not is_debugger_prompt("slynk> ", "lisp", DEBUGGER_PATTERNS)
 
 
 def test_is_prompt_line_bash():
-    assert is_prompt_line("user@host:~$ ", "bash", READY_PATTERNS)
-    assert is_prompt_line("root@host:~# ", "bash", READY_PATTERNS)
-    assert not is_prompt_line("echo hello", "bash", READY_PATTERNS)
+    assert is_prompt_line("user@host:~$ ", "bash", PROMPT_PATTERNS)
+    assert is_prompt_line("root@host:~# ", "bash", PROMPT_PATTERNS)
+    assert not is_prompt_line("echo hello", "bash", PROMPT_PATTERNS)
 
 
 def test_is_prompt_line_unknown_kind():
-    assert not is_prompt_line(">>> ", "nonexistent", READY_PATTERNS)
+    assert not is_prompt_line(">>> ", "nonexistent", PROMPT_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -108,21 +98,21 @@ PYTHON_SESSION = [
 
 
 def test_last_prompt_index():
-    assert last_prompt_index(PYTHON_SESSION, "python", READY_PATTERNS) == 4
+    assert last_prompt_index(PYTHON_SESSION, "python", PROMPT_PATTERNS) == 4
 
 
 def test_second_to_last_prompt_index():
-    assert second_to_last_prompt_index(PYTHON_SESSION, "python", READY_PATTERNS) == 2
+    assert second_to_last_prompt_index(PYTHON_SESSION, "python", PROMPT_PATTERNS) == 2
 
 
 def test_last_prompt_index_none():
     lines = ["just some output", "no prompt here"]
-    assert last_prompt_index(lines, "python", READY_PATTERNS) is None
+    assert last_prompt_index(lines, "python", PROMPT_PATTERNS) is None
 
 
 def test_second_to_last_prompt_index_only_one_prompt():
     lines = ["some output", ">>> "]
-    assert second_to_last_prompt_index(lines, "python", READY_PATTERNS) is None
+    assert second_to_last_prompt_index(lines, "python", PROMPT_PATTERNS) is None
 
 
 # ---------------------------------------------------------------------------
@@ -131,17 +121,17 @@ def test_second_to_last_prompt_index_only_one_prompt():
 
 
 def test_prompt_block_p_true():
-    assert prompt_block_p(PYTHON_SESSION, "python", READY_PATTERNS)
+    assert prompt_block_p(PYTHON_SESSION, "python", PROMPT_PATTERNS)
 
 
 def test_prompt_block_p_no_trailing_prompt():
     lines = [">>> 1 + 1", "2"]
-    assert not prompt_block_p(lines, "python", READY_PATTERNS)
+    assert not prompt_block_p(lines, "python", PROMPT_PATTERNS)
 
 
 def test_prompt_block_p_only_one_prompt():
     lines = ["some output", ">>> "]
-    assert not prompt_block_p(lines, "python", READY_PATTERNS)
+    assert not prompt_block_p(lines, "python", PROMPT_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -151,24 +141,24 @@ def test_prompt_block_p_only_one_prompt():
 
 def test_detect_kind_python():
     lines = [">>> 1 + 1", "2", ">>> "]
-    assert detect_kind(lines, READY_PATTERNS, DEBUGGER_PATTERNS) == "python"
+    assert detect_kind(lines, PROMPT_PATTERNS) == "python"
 
 
 def test_detect_kind_sbcl():
     # SBCL uses the generic "lisp" prompt (* / debugger N]); no separate kind.
     lines = ["* (+ 1 1)", "2", "* "]
-    assert detect_kind(lines, READY_PATTERNS, DEBUGGER_PATTERNS) == "lisp"
+    assert detect_kind(lines, PROMPT_PATTERNS) == "lisp"
 
 
 def test_detect_kind_lisp_debugger():
     # When in debugger, detect_kind should return None (not ready)
     lines = ["* (/ 1 0)", "error message", "0] "]
-    assert detect_kind(lines, READY_PATTERNS, DEBUGGER_PATTERNS) is None
+    assert detect_kind(lines, PROMPT_PATTERNS) == "lisp"
 
 
 def test_detect_kind_none():
     lines = ["just some output"]
-    assert detect_kind(lines, READY_PATTERNS, DEBUGGER_PATTERNS) is None
+    assert detect_kind(lines, PROMPT_PATTERNS) is None
 
 
 # ---------------------------------------------------------------------------
@@ -186,14 +176,14 @@ PYTHON_BLOCK = [
 
 
 def test_extract_last_command_and_output_python():
-    cmd, out = extract_last_command_and_output(PYTHON_BLOCK, "python", READY_PATTERNS)
+    cmd, out = extract_last_command_and_output(PYTHON_BLOCK, "python", PROMPT_PATTERNS)
     assert cmd == "print('world')"
     assert out == "world"
 
 
 def test_extract_last_command_no_block():
     lines = ["some output", ">>> "]
-    cmd, out = extract_last_command_and_output(lines, "python", READY_PATTERNS)
+    cmd, out = extract_last_command_and_output(lines, "python", PROMPT_PATTERNS)
     assert cmd is None
     assert out is None
 
@@ -208,7 +198,7 @@ def test_extract_last_command_lisp():
         "NIL",
         "* ",
     ]
-    cmd, out = extract_last_command_and_output(lines, "lisp", READY_PATTERNS)
+    cmd, out = extract_last_command_and_output(lines, "lisp", PROMPT_PATTERNS)
     assert cmd == '(format t "hello~%")'
     assert "hello" in out
     assert "NIL" in out
@@ -222,6 +212,6 @@ def test_extract_multiline_output():
         "2",
         ">>> ",
     ]
-    cmd, out = extract_last_command_and_output(lines, "python", READY_PATTERNS)
+    cmd, out = extract_last_command_and_output(lines, "python", PROMPT_PATTERNS)
     assert cmd == "for i in range(3): print(i)"
     assert out == "0\n1\n2"
