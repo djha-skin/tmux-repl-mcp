@@ -81,6 +81,13 @@ def split_lines(text: str) -> list[str]:
     return text.split("\n")
 
 
+def is_empty_prompt(line: str, kind: str, kinds: dict[str, list[str]]) -> bool:
+    """Return True if *line* matches the prompt regex for *kind*."""
+    pattern = kinds.get(kind)
+    if pattern is None:
+        return False
+    return bool(re.fullmatch(pattern, line))
+
 def is_prompt_line(line: str, kind: str, kinds: dict[str, list[str]]) -> bool:
     """Return True if *line* matches the prompt regex for *kind*."""
     pattern = kinds.get(kind)
@@ -241,10 +248,14 @@ def wait_and_capture(
             time.sleep(check)
             continue
 
-        last_line = current[-1]
+        last_line = last_meaningful_line(current)
+
+        if last_line is None:
+            time.sleep(check)
+            continue
 
         # Check if we're back at a ready prompt
-        if is_prompt_line(last_line, kind, kinds):
+        if is_empty_prompt(last_line, kind, kinds):
             return current
 
         # Only sleep if we haven't found the prompt yet
