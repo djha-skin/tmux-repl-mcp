@@ -13,11 +13,13 @@ from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from tmux_repl_mcp.config import load_kinds
+from tmux_repl_mcp.config import load_kinds, load_debugger_patterns
 from tmux_repl_mcp.core import (
     capture_pane,
     detect_kind,
     extract_last_command_and_output,
+    is_debugger_prompt,
+    last_meaningful_line,
     send_keys,
     split_lines,
     wait_and_capture,
@@ -42,26 +44,33 @@ mcp = FastMCP(
 @mcp.tool(
     description=(
         "Check whether the specified tmux pane is currently showing a REPL "
-        "prompt. Returns {\"kind\": \"<kind>\"} if a known prompt is detected, "
-        "or {\"kind\": null} if the pane is busy or shows an unrecognised prompt."
+        "prompt. Returns {\"kind\": \"<kind>\", \"is_ready\": true} if a known prompt is detected, "
+        "or {\"kind\": null, \"is_ready\": false} if the pane is busy or shows an unrecognised prompt."
     )
 )
 def is_repl_ready(
+    kind: str,
     pane: str = "0",
-    max_lines: int = 50,
+    max_lines: int = 200,
 ) -> dict[str, Any]:
     """
     Parameters
     ----------
+    kind:
+        The expected REPL kind (e.g. ``"python"``, ``"sbcl"``).
     pane:
         tmux pane identifier (default ``"0"``).
     max_lines:
         How many lines to capture from the pane (default 50).
     """
     kinds = load_kinds()
+    debugger_patterns = load_debugger_patterns()
     lines = split_lines(capture_pane(pane, max_lines))
-    kind = detect_kind(lines, kinds)
-    return {"kind": kind}
+    detected_kind = detect_kind(lines, kinds, debugger_patterns)
+    return {
+        "kind": detected_kind,
+        "is_ready": detected_kind == kind,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -93,14 +102,15 @@ def get_last_command(
         Maximum lines to capture from the pane (default 200).
     """
     kinds = load_kinds()
+    debugger_patterns = load_debugger_patterns()
 
     # Check that the REPL is currently idle.
     lines = split_lines(capture_pane(pane, max_lines))
-    current_kind = detect_kind(lines, kinds)
+    current_kind = detect_kind(lines, kinds, debugger_patterns)
     if current_kind is None:
         return {"last_command": None, "output": None}
 
-    last_command, output = extract_last_command_and_output(lines, kind, kinds)
+    last_command, output = extract_last_command_and_output(lines, kind, kinds, debugger_patterns)
     return {"last_command": last_command, "output": output}
 
 
@@ -138,10 +148,11 @@ def execute_command(
         Seconds to wait between pane-state polls (default 2.0).
     """
     kinds = load_kinds()
+    debugger_patterns = load_debugger_patterns()
 
     # --- pre-flight: is the REPL ready? ------------------------------------
     lines = split_lines(capture_pane(pane, max_lines))
-    current_kind = detect_kind(lines, kinds)
+    current_kind = detect_kind(lines, kinds, debugger_patterns)
 
     if current_kind is None:
         return {
@@ -165,11 +176,23 @@ def execute_command(
     send_keys(pane, command)
 
     # --- wait for command to finish ----------------------------------------
-    final_lines = wait_and_capture(pane, kind, kinds, max_lines, check)
+    final_lines = wait_and_capture(pane, kind, kinds, max_lines, check, debugger_patterns)
+
+    # --- check if we ended up in a debugger --------------------------------
+    last_line = last_meaningful_line(final_lines)
+    if last_line is not None and is_debugger_prompt(last_line, kind, debugger_patterns):
+        # Extract the command and error output even though we're in a debugger
+        last_command, output = extract_last_command_and_output(final_lines, kind, kinds, debugger_patterns)
+        # Return status "ok" - the tool worked correctly, the REPL just entered debugger
+        return {
+            "status": "ok",
+            "last_command": last_command,
+            "output": output,
+        }
 
     # --- extract result ----------------------------------------------------
     last_command, output = extract_last_command_and_output(
-        final_lines, kind, kinds
+        final_lines, kind, kinds, debugger_patterns
     )
     return {
         "status": "ok",
