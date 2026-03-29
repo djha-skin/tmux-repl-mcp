@@ -237,12 +237,11 @@ def wait_and_capture(
     while True:
         current = split_lines(capture_pane(pane, max_lines))
 
-        # Get the last non-empty line (tmux capture-pane often has trailing empty lines)
-        last_line = last_meaningful_line(current)
-
-        if last_line is None:
+        if len(current) == 0:
             time.sleep(check)
             continue
+
+        last_line = current[-1]
 
         # Check if we're back at a ready prompt
         if is_prompt_line(last_line, kind, kinds):

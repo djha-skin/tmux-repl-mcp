@@ -102,9 +102,6 @@ def get_last_command(
 
     # Check that the REPL is currently idle (ready or debugger — both are valid).
     lines = split_lines(capture_pane(pane, max_lines))
-    current_kind = detect_kind(lines, kinds)
-    if current_kind is None:
-        return {"last_command": None, "output": None}
 
     last_command, output = extract_last_command_and_output(lines, kind, kinds)
     return {"last_command": last_command, "output": output}
