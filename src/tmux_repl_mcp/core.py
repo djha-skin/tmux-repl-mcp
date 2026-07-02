@@ -35,6 +35,8 @@ DEFAULT_PROMPT_PATTERNS: dict[str, str] = {
     "node": r"^> ",
     "irb": r"^irb\(.*\):\d+:\d+> $",
     "iex": r"^iex\(\d+\)> $",
+    # Goose TUI prompt – the ready-state footer line
+    "goose": r"🪿 Enter to send.*",
 }
 
 # ---------------------------------------------------------------------------
@@ -48,7 +50,7 @@ def capture_pane(pane: str, max_lines: int) -> str:
         ["tmux", "capture-pane", "-t", pane, "-p", "-S", f"-{max_lines}"],
         capture_output=True,
         text=True,
-        encoding="ISO-8859-1", # This is just "normal" bash encoding
+        encoding="utf-8", # Modern terminals use UTF-8
         errors="replace", # Replace invalid bytes with � to avoid decode errors
     )
     if result.returncode != 0:

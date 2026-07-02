@@ -215,3 +215,89 @@ def test_extract_multiline_output():
     cmd, out = extract_last_command_and_output(lines, "python", PROMPT_PATTERNS)
     assert cmd == "for i in range(3): print(i)"
     assert out == "0\n1\n2"
+
+
+# ---------------------------------------------------------------------------
+# goose
+# ---------------------------------------------------------------------------
+
+GOOSE_READY = "🪿 Enter to send · Ctrl+J newline"
+GOOSE_BUSY = "🪿 Press Ctrl+C again to exit, or type new instructions to continue"
+
+
+def test_is_prompt_line_goose():
+    assert is_prompt_line(GOOSE_READY, "goose", PROMPT_PATTERNS)
+    assert not is_prompt_line(GOOSE_BUSY, "goose", PROMPT_PATTERNS)
+    assert not is_prompt_line("some other output", "goose", PROMPT_PATTERNS)
+
+
+def test_is_prompt_line_goose_not_other_kinds():
+    assert not is_prompt_line(GOOSE_READY, "python", PROMPT_PATTERNS)
+    assert not is_prompt_line(GOOSE_READY, "bash", PROMPT_PATTERNS)
+
+
+def test_last_meaningful_line_goose():
+    lines = [
+        "    __( O)>  ● new session",
+        "   \\____)    20260702_6",
+        "     L L     goose is ready",
+        "  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ 0% 0/128k",
+        f"Cost: $0.0000 USD (0 tokens: in 0, out 0)",
+        GOOSE_READY,
+    ]
+    assert last_meaningful_line(lines) == GOOSE_READY
+
+
+def test_last_prompt_index_goose():
+    lines = [
+        "    __( O)>  ● new session",
+        "   \\____)    20260702_6",
+        "     L L     goose is ready",
+        "  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ 0% 0/128k",
+        f"Cost: $0.0000 USD (0 tokens: in 0, out 0)",
+        GOOSE_READY,
+    ]
+    assert last_prompt_index(lines, "goose", PROMPT_PATTERNS) == 5
+
+
+def test_detect_kind_goose():
+    lines = [
+        "    __( O)>  ● new session",
+        "   \\____)    20260702_6",
+        "     L L     goose is ready",
+        "  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ 0% 0/128k",
+        f"Cost: $0.0000 USD (0 tokens: in 0, out 0)",
+        GOOSE_READY,
+    ]
+    assert detect_kind(lines, PROMPT_PATTERNS) == "goose"
+
+
+def test_detect_kind_goose_busy():
+    lines = [
+        "    __( O)>  ● new session",
+        "   \\____)    20260702_6",
+        "     L L     processing...",
+        "  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ 2% 100/128k",
+        f"Cost: $0.0012 USD (50 tokens: in 30, out 20)",
+        GOOSE_BUSY,
+    ]
+    assert detect_kind(lines, PROMPT_PATTERNS) is None
+
+
+def test_prompt_block_p_goose():
+    # Two goose prompts with content between them = valid block
+    lines = [
+        "Cost: $0.0000 USD (0 tokens: in 0, out 0)",
+        GOOSE_READY,
+        "Cost: $0.0012 USD (50 tokens: in 30, out 20)",
+        GOOSE_READY,
+    ]
+    assert prompt_block_p(lines, "goose", PROMPT_PATTERNS)
+
+
+def test_prompt_block_p_goose_single_prompt():
+    lines = [
+        "    __( O)>  ● new session",
+        GOOSE_READY,
+    ]
+    assert not prompt_block_p(lines, "goose", PROMPT_PATTERNS)

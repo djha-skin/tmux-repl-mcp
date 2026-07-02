@@ -141,3 +141,60 @@ def test_execute_command_lisp_debugger():
     assert result["last_command"] == "(/ 1 0)"
     if result["output"] is not None:
         assert "debugger invoked" in result["output"]
+
+
+# ---------------------------------------------------------------------------
+# goose
+# ---------------------------------------------------------------------------
+
+GOOSE_READY_PANE = (
+    "    __( O)>  ● new session · openrouter deepseek/deepseek-v4-flash\n"
+    "   \\____)    20260702_6 · /home/skin/Code/djha-skin/tmux-repl-mcp\n"
+    "     L L     goose is ready\n"
+    "  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ 0% 0/128k\n"
+    "Cost: $0.0000 USD (0 tokens: in 0, out 0)\n"
+    "🪿 Enter to send · Ctrl+J newline"
+)
+
+def test_is_repl_ready_goose():
+    with _mock_capture(GOOSE_READY_PANE):
+        result = srv.is_repl_ready(kind="goose", pane="8.0")
+    assert result == {"kind": "goose", "is_ready": True}
+
+
+def test_is_repl_ready_goose_busy():
+    busy = (
+        "    __( O)>  ● new session\n"
+        "   \\____)    20260702_6\n"
+        "     L L     processing...\n"
+        "  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ 2% 100/128k\n"
+        "Cost: $0.0012 USD (50 tokens: in 30, out 20)\n"
+        "🪿 Press Ctrl+C again to exit, or type new instructions to continue"
+    )
+    with _mock_capture(busy):
+        result = srv.is_repl_ready(kind="goose", pane="8.0")
+    assert result == {"kind": None, "is_ready": False}
+
+
+def test_execute_command_goose():
+    """Send a command to goose and wait for the ready prompt to return."""
+    ready_lines = GOOSE_READY_PANE.split("\n")
+
+    with patch("tmux_repl_mcp.server.capture_pane", return_value=GOOSE_READY_PANE), \
+         patch("tmux_repl_mcp.server.send_keys") as mock_send, \
+         patch("tmux_repl_mcp.server.wait_and_capture",
+               return_value=ready_lines):
+        result = srv.execute_command(
+            command="what is 2+2",
+            kind="goose",
+            pane="8.0",
+            max_lines=200,
+            check=0.0,
+        )
+
+    mock_send.assert_called_once_with("8.0", "what is 2+2")
+    assert result["status"] == "ok"
+    # extract_last_command_and_output finds the prompt block;
+    # with only one prompt line in the result there's no second prompt
+    # to delimit output, so last_command / output may be None.
+    # The important thing is status == ok.
