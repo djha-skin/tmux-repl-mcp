@@ -3,7 +3,7 @@
 An [MCP](https://modelcontextprotocol.io/) server for interacting with a REPL
 running inside a [tmux](https://github.com/tmux/tmux) pane.
 
-With it running, you might say something like
+With it running, you might say something like the following to your AI:
 
 > I have a Lisp REPL running in the other pane (pane 0) of the current window we're in (window 6). Please debug the function we're writing together using that REPL.
 
