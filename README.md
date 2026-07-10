@@ -10,10 +10,11 @@ With it running, you might say something like the following to your AI:
 It works with way more than just Lisp -- Python shell, Ruby `irb`, and Goose itself are all supported. Additional types of REPLs may be specified via environment variable.
 
 Use it with [Goose](https://github.com/block/goose), Cursor, or any other MCP
-client to send commands to a running REPL and read back the output with perfect
-timing — no more guessing how long to `sleep`.
+client.
 
----
+## But Why
+
+I was working with my AI to interact with another tmux pane, and it could do it via CLI commands, but it doesn't know how to just get the output of the last command it run. Indeed, tmux doesn't support this directly. You have to ask it for the last e.g. 5000 lines or whatever, hoping that window has your output. But this poisons the context with too many tokens, and it has no mechanism for waiting until the command is finished. You just have to keep sleeping and checking, `sleep`ing and checking. With this tool, I can now send commands to a running REPL and read back the output with perfect timing — no more guessing how long to `sleep`, no more context poisoning, no more "wait, 1000 lines wasn't enough" nonsense.
 
 ## Features
 
