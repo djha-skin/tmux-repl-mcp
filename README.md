@@ -7,6 +7,8 @@ With it running, you might say something like the following to your AI:
 
 > I have a Lisp REPL running in the other pane (pane 0) of the current window we're in (window 6). Please debug the function we're writing together using that REPL.
 
+It works with way more than just Lisp -- Python shell, Ruby `irb`, and Goose itself are all supported. Additional types of REPLs may be specified via environment variable.
+
 Use it with [Goose](https://github.com/block/goose), Cursor, or any other MCP
 client to send commands to a running REPL and read back the output with perfect
 timing — no more guessing how long to `sleep`.
