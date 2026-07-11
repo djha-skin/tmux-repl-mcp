@@ -28,6 +28,8 @@ I was working with my AI to interact with another tmux pane, and it could do it 
 
 ## Quick start
 
+This works now:
+
 ```bash
 uvx tmux-repl-mcp
 ```
