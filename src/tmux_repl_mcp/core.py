@@ -44,33 +44,85 @@ DEFAULT_PROMPT_PATTERNS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-def capture_pane(pane: str, max_lines: int) -> str:
-    """Return the last *max_lines* lines of a tmux pane as a raw string."""
+def _window_fallback(pane: str) -> Optional[str]:
+    """Alternate pane target for servers with base-index 1.
+
+    Window/pane index 0 does not exist when tmux is configured with
+    ``base-index 1`` / ``pane-base-index 1``, so retry with index 1.
+    """
+    if pane == "0":
+        return "1"
+    if ":0" in pane:
+        return pane.replace(":0", ":1", 1)
+    if pane.endswith(".0"):
+        return pane[:-2] + ".1"
+    return None
+
+
+def _run_tmux(pane: str, args, what: str, **run_kwargs) -> subprocess.CompletedProcess:
+    """Run a tmux command targeting *pane*, retrying with the base-index-1
+    fallback target if the original target's window/pane cannot be found."""
     result = subprocess.run(
-        ["tmux", "capture-pane", "-t", pane, "-p", "-S", f"-{max_lines}"],
+        args(pane),
         capture_output=True,
         text=True,
-        encoding="utf-8", # Modern terminals use UTF-8
-        errors="replace", # Replace invalid bytes with � to avoid decode errors
+        **run_kwargs,
     )
+    if result.returncode != 0 and "can't find" in result.stderr:
+        fallback = _window_fallback(pane)
+        if fallback is not None:
+            retry = subprocess.run(
+                args(fallback),
+                capture_output=True,
+                text=True,
+                **run_kwargs,
+            )
+            if retry.returncode == 0:
+                return retry
     if result.returncode != 0:
         raise RuntimeError(
-            f"tmux capture-pane failed for pane {pane!r}: {result.stderr.strip()}"
+            f"tmux {what} failed for pane {pane!r}: {result.stderr.strip()}"
         )
+    return result
+
+
+def capture_pane(pane: str, max_lines: int) -> str:
+    """Return the last *max_lines* lines of a tmux pane as a raw string."""
+    result = _run_tmux(
+        pane,
+        lambda p: ["tmux", "capture-pane", "-t", p, "-p", "-S", f"-{max_lines}"],
+        "capture-pane",
+        encoding="utf-8",  # Modern terminals use UTF-8
+        errors="replace",  # Replace invalid bytes with � to avoid decode errors
+    )
     return result.stdout
 
 
 def send_keys(pane: str, command: str) -> None:
     """Send *command* followed by Enter to the tmux pane."""
-    result = subprocess.run(
-        ["tmux", "send-keys", "-t", pane, command, "Enter"],
-        capture_output=True,
-        text=True,
+    _run_tmux(
+        pane,
+        lambda p: ["tmux", "send-keys", "-t", p, command, "Enter"],
+        "send-keys",
     )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"tmux send-keys failed for pane {pane!r}: {result.stderr.strip()}"
-        )
+
+
+def send_literal(pane: str, text: str) -> None:
+    """Send *text* literally (no Enter, no key-name interpretation)."""
+    _run_tmux(
+        pane,
+        lambda p: ["tmux", "send-keys", "-t", p, "-l", text],
+        "send-keys",
+    )
+
+
+def send_backspaces(pane: str, count: int) -> None:
+    """Send *count* backspaces to erase previously typed characters."""
+    _run_tmux(
+        pane,
+        lambda p: ["tmux", "send-keys", "-t", p] + ["BSpace"] * count,
+        "send-keys",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +271,84 @@ def extract_last_command_and_output(
     return last_command, output
 
 
+def extract_output_after_command(
+    lines: list[str],
+    command: str,
+    kind: str,
+    kinds: dict[str, str],
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Extract output using the sent *command* text as the start boundary.
+
+    Used in probed-prompt mode, where prompt themes (e.g. powerlevel10k
+    transient prompts) rewrite finished prompt lines so the probed prompt
+    character cannot reliably delimit blocks. The command line is instead
+    located by its own text; output is everything after it, with trailing
+    prompt/empty lines stripped.
+    """
+    # Long commands wrap across pane lines — match on a prefix.
+    needle = command[:60].strip()
+    start_idx: Optional[int] = None
+    for i, line in enumerate(lines):
+        if needle and needle in line:
+            start_idx = i
+    if start_idx is None:
+        return None, None
+
+    tail = lines[start_idx + 1 :]
+    # Strip trailing empty lines and the fresh prompt line(s).
+    while tail and (
+        not tail[-1].strip() or is_prompt_line(tail[-1], kind, kinds)
+    ):
+        tail.pop()
+    return command, "\n".join(tail)
+
+
+# ---------------------------------------------------------------------------
+# Probe-based prompt discovery
+# ---------------------------------------------------------------------------
+
+PROBE_SENTINEL = "TMUXREPLPROBE"
+
+
+def probe_prompt_pattern(
+    pane: str,
+    max_lines: int = 200,
+    settle: float = 0.3,
+) -> Optional[str]:
+    """
+    Discover a prompt pattern by typing a sentinel string into the pane.
+
+    If the pane is showing a prompt, the sentinel lands right after it. We
+    capture the pane, locate the sentinel, take up to the 10 characters
+    preceding it, strip trailing whitespace, and use the last remaining
+    non-whitespace character as the prompt marker. The sentinel is erased
+    with backspaces before returning.
+
+    Returns a prompt regex string, or None if the sentinel never appeared or
+    nothing precedes it (a bare/empty prompt column).
+    """
+    send_literal(pane, PROBE_SENTINEL)
+    try:
+        # Poll: over SSH the remote echo can take a while to reach the pane.
+        deadline = time.monotonic() + max(settle, 2.0)
+        while True:
+            lines = split_lines(capture_pane(pane, max_lines))
+            for line in reversed(lines):
+                idx = line.rfind(PROBE_SENTINEL)
+                if idx == -1:
+                    continue
+                before = line[max(0, idx - 10):idx].rstrip()
+                if not before:
+                    return None
+                return re.escape(before[-1]) + " *"
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(settle)
+    finally:
+        send_backspaces(pane, len(PROBE_SENTINEL))
+
+
 # ---------------------------------------------------------------------------
 # execute_command wait loop
 # ---------------------------------------------------------------------------
@@ -230,6 +360,8 @@ def wait_and_capture(
     kinds: dict[str, str],
     max_lines: int,
     check: float,
+    command: Optional[str] = None,
+    probed: bool = False,
 ) -> list[str]:
     """
     Wait until the REPL is idle again.
@@ -259,6 +391,19 @@ def wait_and_capture(
         # Check if we're back at a ready prompt
         if is_empty_prompt(last_line, kind, kinds):
             return current
+
+        # Probed patterns come from themed prompts (e.g. powerlevel10k) whose
+        # idle line carries decorations and never fullmatches. There, treat a
+        # prompt line as "idle again" once the sent command has been echoed
+        # somewhere above it (guards against capturing before the terminal
+        # has even echoed the command) and is gone from the prompt line.
+        if probed and is_prompt_line(last_line, kind, kinds):
+            needle = (command or "")[:60].strip()
+            if not needle or (
+                needle not in last_line
+                and any(needle in line for line in current)
+            ):
+                return current
 
         # Only sleep if we haven't found the prompt yet
         time.sleep(check)

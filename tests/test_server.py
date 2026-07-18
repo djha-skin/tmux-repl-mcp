@@ -17,6 +17,13 @@ def _mock_capture(content: str):
     return patch("tmux_repl_mcp.server.capture_pane", return_value=content)
 
 
+@pytest.fixture(autouse=True)
+def no_real_probe():
+    """Keep the probe fallback from touching a real tmux server in unit tests."""
+    with patch("tmux_repl_mcp.server.probe_prompt_pattern", return_value=None):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # is_repl_ready
 # ---------------------------------------------------------------------------
@@ -25,13 +32,13 @@ def _mock_capture(content: str):
 def test_is_repl_ready_python():
     with _mock_capture(PYTHON_IDLE):
         result = srv.is_repl_ready(kind="python", pane="0")
-    assert result == {"kind": "python", "is_ready": True}
+    assert result == {"kind": "python", "is_ready": True, "probed": False}
 
 
 def test_is_repl_ready_busy():
     with _mock_capture("Running something...\n"):
         result = srv.is_repl_ready(kind="python", pane="0")
-    assert result == {"kind": None, "is_ready": False}
+    assert result == {"kind": None, "is_ready": False, "probed": False}
 
 
 def test_is_repl_ready_lisp():
@@ -39,7 +46,7 @@ def test_is_repl_ready_lisp():
     content = "* (+ 1 2)\n3\n* \n"
     with _mock_capture(content):
         result = srv.is_repl_ready(kind="lisp", pane="1")
-    assert result == {"kind": "lisp", "is_ready": True}
+    assert result == {"kind": "lisp", "is_ready": True, "probed": False}
 
 
 def test_is_repl_ready_lisp_debugger():
@@ -47,7 +54,7 @@ def test_is_repl_ready_lisp_debugger():
     content = "* (/ 1 0)\nerror\n0] \n"
     with _mock_capture(content):
         result = srv.is_repl_ready(kind="lisp", pane="0")
-    assert result == {"kind": "lisp", "is_ready": True}
+    assert result == {"kind": "lisp", "is_ready": True, "probed": False}
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +166,7 @@ GOOSE_READY_PANE = (
 def test_is_repl_ready_goose():
     with _mock_capture(GOOSE_READY_PANE):
         result = srv.is_repl_ready(kind="goose", pane="8.0")
-    assert result == {"kind": "goose", "is_ready": True}
+    assert result == {"kind": "goose", "is_ready": True, "probed": False}
 
 
 def test_is_repl_ready_goose_busy():
@@ -173,7 +180,7 @@ def test_is_repl_ready_goose_busy():
     )
     with _mock_capture(busy):
         result = srv.is_repl_ready(kind="goose", pane="8.0")
-    assert result == {"kind": None, "is_ready": False}
+    assert result == {"kind": None, "is_ready": False, "probed": False}
 
 
 def test_execute_command_goose():

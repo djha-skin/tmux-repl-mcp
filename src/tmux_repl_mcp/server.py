@@ -18,10 +18,36 @@ from tmux_repl_mcp.core import (
     capture_pane,
     detect_kind,
     extract_last_command_and_output,
+    extract_output_after_command,
+    probe_prompt_pattern,
     send_keys,
     split_lines,
     wait_and_capture,
 )
+
+
+def _detect_with_probe(
+    kind: str,
+    pane: str,
+    kinds: dict[str, str],
+    lines: list[str],
+    max_lines: int,
+) -> tuple[Optional[str], dict[str, str], bool]:
+    """Detect the pane's REPL kind, falling back to sentinel probing.
+
+    When no built-in prompt pattern matches (e.g. a themed zsh prompt),
+    probe the pane for its prompt character and, if found, override the
+    requested *kind*'s pattern with the probed one.
+
+    Returns ``(detected_kind, effective_kinds, probed)``.
+    """
+    detected = detect_kind(lines, kinds)
+    if detected is not None:
+        return detected, kinds, False
+    pattern = probe_prompt_pattern(pane, max_lines)
+    if pattern is None:
+        return None, kinds, False
+    return kind, {**kinds, kind: pattern}, True
 
 mcp = FastMCP(
     "tmux-repl-mcp",
@@ -63,10 +89,11 @@ def is_repl_ready(
     """
     kinds = load_kinds()
     lines = split_lines(capture_pane(pane, max_lines))
-    detected_kind = detect_kind(lines, kinds)
+    detected_kind, _, probed = _detect_with_probe(kind, pane, kinds, lines, max_lines)
     return {
         "kind": detected_kind,
         "is_ready": detected_kind == kind,
+        "probed": probed,
     }
 
 
@@ -104,6 +131,12 @@ def get_last_command(
     lines = split_lines(capture_pane(pane, max_lines))
 
     last_command, output = extract_last_command_and_output(lines, kind, kinds)
+    if last_command is None and output is None:
+        # No built-in pattern matched — try probe-based prompt discovery.
+        _, kinds, probed = _detect_with_probe(kind, pane, kinds, lines, max_lines)
+        if probed:
+            lines = split_lines(capture_pane(pane, max_lines))
+            last_command, output = extract_last_command_and_output(lines, kind, kinds)
     return {"last_command": last_command, "output": output}
 
 
@@ -144,7 +177,7 @@ def execute_command(
 
     # --- pre-flight: is the REPL ready? ------------------------------------
     lines = split_lines(capture_pane(pane, max_lines))
-    current_kind = detect_kind(lines, kinds)
+    current_kind, kinds, probed = _detect_with_probe(kind, pane, kinds, lines, max_lines)
 
     if current_kind is None:
         return {
@@ -168,12 +201,19 @@ def execute_command(
     send_keys(pane, command)
 
     # --- wait for command to finish ----------------------------------------
-    final_lines = wait_and_capture(pane, kind, kinds, max_lines, check)
+    final_lines = wait_and_capture(
+        pane, kind, kinds, max_lines, check, command=command, probed=probed
+    )
 
     # --- extract result ----------------------------------------------------
-    last_command, output = extract_last_command_and_output(
-        final_lines, kind, kinds
-    )
+    if probed:
+        last_command, output = extract_output_after_command(
+            final_lines, command, kind, kinds
+        )
+    else:
+        last_command, output = extract_last_command_and_output(
+            final_lines, kind, kinds
+        )
     return {
         "status": "ok",
         "last_command": last_command,
